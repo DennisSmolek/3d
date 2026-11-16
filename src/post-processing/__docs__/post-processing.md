@@ -69,7 +69,7 @@ Use both with a camera in its default perspective {@link Camera3D#mode | mode}, 
 
 ### Motion blur
 
-{@link MotionBlurEffect} blurs by how far each surface moved on screen. Turning or moving the camera streaks opaque meshes, but not the view's background, and a car driving past a still camera streaks too. A mesh that moves with the camera, such as a cockpit, stays sharp. A skinned or morphed mesh streaks as its node moves, not as it bends. On a camera cut, such as a respawn, call the camera's {@link Camera3D#resetHistory | resetHistory} so the jump doesn't smear the first frame of the new shot.
+{@link MotionBlurEffect} blurs by how far each surface moved on screen. Turning or moving the camera streaks opaque meshes, but not the view's background, and a car driving past a still camera streaks too. A mesh that moves with the camera, such as a cockpit, stays sharp. A skinned or morphed mesh streaks as it bends, too. On a camera cut, such as a respawn, call the camera's {@link Camera3D#resetHistory | resetHistory} so the jump doesn't smear the first frame of the new shot.
 
 [Motion blur](/3d/examples?example=post_motion-blur) circles the camera round a ring of clay posts. The posts near its path streak, the logo at the centre of the orbit stays nearly sharp, and a top spinning beside the logo smears round as it turns.
 

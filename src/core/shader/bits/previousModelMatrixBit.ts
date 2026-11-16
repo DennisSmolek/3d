@@ -36,6 +36,25 @@ export const previousModelMatrixBit: ShaderBit = {
   },
 };
 
+/**
+ * Declares `previousPosition`, the local position at the view's previous render. The material systems add it right
+ * after the position bit, and the previous-render morph and skinning bits deform it as their twins deform `position`
+ * @internal
+ */
+export const previousPositionBit: ShaderBit = {
+  name: 'previousPosition',
+  gpu: {
+    vertex: {
+      input: /* wgsl */ `var previousPosition = position;`,
+    },
+  },
+  gl: {
+    vertex: {
+      input: /* glsl */ `vec4 previousPosition = position;`,
+    },
+  },
+};
+
 /** @internal */
 export function readsPreviousModelMatrix(bit: ShaderBit): boolean {
   if (bit.name === previousModelMatrixBit.name) return true;

@@ -11,6 +11,7 @@ import type { ColorHandle } from '~/core/render-graph/ResourceHandle';
 import { RenderPassBit } from '~/core/render-passes/RenderPass';
 import type { RenderSession } from '~/core/render-passes/RenderSession';
 import { velocityOutput } from '~/extras/scene-outputs/velocityOutput';
+import { Geometry3D } from '~/geometry/Geometry3D';
 import { PlaneGeometry } from '~/geometry/PlaneGeometry';
 import { FlatMaterial } from '~/materials/flat/FlatMaterial';
 import { Material3D } from '~/materials/pbr/Material3D';
@@ -22,6 +23,7 @@ import { MeshPass } from '~/post-processing/passes/MeshPass';
 import { BatchedMesh3D } from '~/scene/BatchedMesh3D';
 import { Camera3D } from '~/scene/cameras/Camera3D';
 import { Mesh3D } from '~/scene/Mesh3D';
+import { Skeleton } from '~/scene/Skeleton';
 import { View3D } from '~/scene/View3D';
 
 const SIZE = 32;
@@ -245,6 +247,35 @@ function plane(width: number, height: number, alphaMode: 'opaque' | 'blend' = 'o
   return new Mesh3D({
     geometry: new PlaneGeometry({ width, height }),
     material: new FlatMaterial({ doubleSided: true, alphaMode, alpha: alphaMode === 'blend' ? 0.5 : 1 }),
+  });
+}
+
+const QUAD_8X8 = new Float32Array([-4, -4, 0, 4, -4, 0, 4, 4, 0, -4, 4, 0]);
+
+function deformedQuad(options: { skinned?: boolean; wholeQuadMorphs?: number[][] }): Mesh3D {
+  const morphs = options.wholeQuadMorphs ?? [];
+  const geometry = new Geometry3D({
+    positions: QUAD_8X8,
+    indices: new Uint16Array([0, 1, 2, 0, 2, 3]),
+    ...(options.skinned && {
+      joints: new Uint16Array(16),
+      weights: new Float32Array([1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0]),
+    }),
+    ...(morphs.length > 0 && {
+      morphTargets: morphs.map((move) => ({ positions: new Float32Array(QUAD_8X8.map((_, i) => move[i % 3])) })),
+    }),
+  });
+
+  return new Mesh3D({
+    geometry,
+    material: new FlatMaterial({ doubleSided: true }),
+    ...(options.skinned && {
+      skeleton: new Skeleton({
+        parent: new Int16Array([-1]),
+        joints: new Int16Array([0]),
+        inverseBindMatrices: new Float32Array([1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]),
+      }),
+    }),
   });
 }
 
@@ -480,6 +511,122 @@ for (const preference of ['webgpu', 'webgl'] as const) {
       expect(joining._storeIndex, 'the new mesh reuses the store row').toBe(row);
       expect(largest(await capture.read())).toBeLessThan(1e-4);
       leaving.destroy();
+    });
+
+    it('reads a bone turning a skinned mesh in front of a still camera', async () => {
+      const capture = new VelocityCapture();
+      await setup('skinned', [capture]);
+      view3d.camera.useOrthographic(10, 0.1, 100);
+      view3d.camera.position.set(0, 0, 10);
+      const quad = deformedQuad({ skinned: true });
+      view3d.root.addChild(quad);
+      const turn = 0.1;
+
+      await renderFrame(app);
+      await capture.read();
+      quad.skeleton!.setLocalTRS(0, 0, 0, 0, 0, 0, Math.sin(turn / 2), Math.cos(turn / 2));
+      await renderFrame(app);
+      const frame = await capture.read();
+
+      const wrong: string[] = [];
+      let covered = 0;
+      for (let y = 0; y < PHYSICAL; y++) {
+        for (let x = 0; x < PHYSICAL; x++) {
+          if (!frame.covered[y * PHYSICAL + x]) continue;
+          covered++;
+          const radius = Math.hypot((x + 0.5) * WORLD_PER_PIXEL - 10, (y + 0.5) * WORLD_PER_PIXEL - 10);
+          const expected = (2 * radius * Math.sin(turn / 2)) / 20;
+          const speed = Math.hypot(...at(frame, x, y));
+          if (Math.abs(speed - expected) > 2e-4) wrong.push(`${x}, ${y} moved ${speed}, not ${expected}`);
+        }
+      }
+      expect(wrong.slice(0, 8), 'each texel moves along its arc round the bone').toEqual([]);
+      expect(covered).toBeGreaterThan(0);
+
+      await renderFrame(app);
+      expect(largest(await capture.read()), 'it reads zero once the bone stops').toBeLessThan(1e-4);
+    });
+
+    it('reads a morph weight moving the surface', async () => {
+      const capture = new VelocityCapture();
+      await setup('morph', [capture]);
+      view3d.camera.useOrthographic(10, 0.1, 100);
+      view3d.camera.position.set(0, 0, 10);
+      const quad = deformedQuad({ wholeQuadMorphs: [[2 * WORLD_PER_PIXEL, -4 * WORLD_PER_PIXEL, 0]] });
+      view3d.root.addChild(quad);
+
+      await renderFrame(app);
+      await capture.read();
+      quad.weights![0] = 1;
+      await renderFrame(app);
+      expectCoveredReads(await capture.read(), 2 / PHYSICAL, 4 / PHYSICAL);
+
+      await renderFrame(app);
+      expect(largest(await capture.read()), 'it reads zero once the weight stops').toBeLessThan(1e-4);
+    });
+
+    it('reads zero on a skinned and morphed mesh that holds a deformed pose', async () => {
+      const capture = new VelocityCapture();
+      await setup('deformed-still', [capture]);
+      view3d.camera.useOrthographic(10, 0.1, 100);
+      view3d.camera.position.set(0, 0, 10);
+      const ahead = deformedQuad({ skinned: true });
+      ahead.skeleton!.setLocalTRS(0, 50, 0, 0, 0, 0, 0, 1);
+      const quad = deformedQuad({
+        skinned: true,
+        wholeQuadMorphs: [
+          [1, 0, 0],
+          [0, 1, 0],
+        ],
+      });
+      quad.weights!.set([0.5, -0.25]);
+      quad.skeleton!.setLocalTRS(0, 1, 0, 0, 0, 0, Math.sin(0.2), Math.cos(0.2));
+      view3d.root.addChild(ahead, quad);
+
+      await renderFrame(app);
+      await capture.read();
+      await renderFrame(app);
+      const frame = await capture.read();
+      expect(
+        frame.covered.some((c) => c === 1),
+        'the mesh is in view',
+      ).toBe(true);
+      expect(largest(frame)).toBeLessThan(1e-4);
+    });
+
+    it('reads zero on the first frame of meshes that take the bone range and weight slot removed ones left', async () => {
+      const capture = new VelocityCapture();
+      await setup('deformed-new', [capture]);
+      view3d.camera.useOrthographic(10, 0.1, 100);
+      view3d.camera.position.set(0, 0, 10);
+      const leavingSkinned = deformedQuad({ skinned: true });
+      leavingSkinned.skeleton!.setLocalTRS(0, 50, 0, 0, 0, 0, 0, 1);
+      const leavingMorphed = deformedQuad({ wholeQuadMorphs: [[50, 0, 0]] });
+      leavingMorphed.weights![0] = 1;
+      view3d.root.addChild(leavingSkinned, leavingMorphed);
+
+      await renderFrame(app);
+      await capture.read();
+      const base = leavingSkinned.skeleton!._bonePitIndex;
+      const slot = leavingMorphed._morph!._slot;
+      view3d.root.removeChild(leavingSkinned, leavingMorphed);
+      const skinned = deformedQuad({ skinned: true });
+      skinned.position.set(-5, 0, 0);
+      const morphed = deformedQuad({ wholeQuadMorphs: [[50, 0, 0]] });
+      morphed.position.set(5, 0, 0);
+      view3d.root.addChild(skinned, morphed);
+      await renderFrame(app);
+
+      expect(skinned.skeleton!._bonePitIndex, 'the new skeleton takes the bone range').toBe(base);
+      expect(morphed._morph!._slot, 'the new morph takes the weight slot').toBe(slot);
+      const frame = await capture.read();
+      expect(
+        frame.covered.some((c) => c === 1),
+        'the new meshes are in view',
+      ).toBe(true);
+      expect(largest(frame)).toBeLessThan(1e-4);
+      leavingSkinned.destroy();
+      leavingMorphed.destroy();
     });
 
     it('reads UV across the view, not across the pooled texture, on a view of no power-of-two size', async () => {

@@ -9,8 +9,8 @@ import { velocityBit } from './velocityBit';
  * across the view's image, so `uv - velocity` is where the surface was in last frame's image. It
  * counts the camera's motion and each mesh's own, {@link BatchedMesh3D} slots included: a car
  * passing a still camera reads its speed, and a cockpit parented to a moving camera reads zero.
- * Skinning and morph targets don't count, so a mesh that deforms in place reads only how its node
- * moved. A mesh reads none of its own motion on its first render in the view.
+ * Skinning and morph targets count too, so a character's swinging arm reads its swing. A mesh reads
+ * none of its own motion on its first render in the view.
  *
  * `v` runs the way the scene texture's rows do, like the `uv` an `effect(uv)` receives, so
  * `uv - velocity` works on both backends and any target. Which way `v` points on screen varies
